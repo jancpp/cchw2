@@ -49,7 +49,24 @@ compileFunctions named = concatMap (compileFunction named)
 
 type TemporaryMap = [(String, X86.SourceOperand)]
 temporaries :: Cfg -> [String]
-temporaries = error "Unimplemented"
+temporaries  (first, rest) = concatMap (temporaries') blocks
+        where blocks = ("^", first) : rest
+
+temporaries' :: (String, Block) -> [String]
+temporaries' (n, (instrs, term)) = concatMap getDefs instrs
+
+getDefs :: LL.Instruction -> [String]
+getDefs (Bin def _ _ _ _)         = [def]
+getDefs (Alloca def _ )           = [def]
+getDefs (Load def _ _ )           = [def]
+getDefs (Store _ _ _ )           = []
+getDefs (Icmp def _ _ _ _   )     = [def]
+getDefs (Call def _ _ [(_, _)])   = [def]
+getDefs (Bitcast def _ _ _ )      = [def]
+getDefs (Gep def _ _ [_])         = [def]
+
+
+
 
 compileFunction :: Types -> (String, Function) -> X86.Prog
 compileFunction = error "Unimplemented"
@@ -58,11 +75,33 @@ compileBlock :: Types -> TemporaryMap -> Block -> [X86.SourceInstr]
 compileBlock = error "Unimplemented"
 
 compileOperand :: TemporaryMap -> LL.Operand -> X86.SourceOperand
-compileOperand = error "Unimplemented"
+compileOperand tempMap (Const n) = Imm (Literal n)
+compileOperand tempMap (Gid n) = IndImm (Label n)
+compileOperand tempMap (Uid n) = fromJust (lookup n tempMap)
+
 
 compileInstr :: Types -> TemporaryMap -> LL.Instruction -> [X86.SourceInstr]
-compileInstr = error "Unimplemented"
+compileInstr ts tempMap (Bin dst oprt _ opd1 opd2) = ... -- %uid = binop t op, op
+compileInstr ts tempMap (Alloca al ty) = [subq -- use sizeOf on top
+                                         , movq]                       -- %uid = alloca t
+compileInstr ts tempMap   Load String Type Operand                  -- %uid = load t, t* op
+compileInstr ts tempMap   Store Type Operand Operand                -- store t op1, t* op2
+compileInstr ts tempMap   Icmp String Condition Type Operand Operand -- %uid = icmp rel t op1 op2
+compileInstr ts tempMap   Call String Type String [(Type, Operand)] -- %uid = call ret_ty name(t1 op1, t2 op2, ...)
+compileInstr ts tempMap   Bitcast String Type Operand Type          -- %uid = bitcast t1 op to t2
+compileInstr ts tempMap   Gep String Type Operand [Operand]
 
 
 compileTerm :: TemporaryMap -> Terminator -> [X86.SourceInstr]
-compileTerm = error "Unimplemented"
+compileTerm tempMap (Ret _ Nothing) = [ movq ~%RBP ~%RSP
+                                      , popq ~%RBP
+                                      , retq]
+compileTerm tempMap (Ret _ (Just op)) = [ movq ~~(compileOperand tempMap op) ~%RAX -- for ll operands
+                                        , movq ~%RBP ~%RSP
+                                        , popq ~%RBP
+                                        , retq]
+compileTerm tempMap (Bra n) = [jmp ~$$ n]
+compileTerm tempMap (CBr op l1 l2) = [ cmpq ~$1 ~~(compileOperand tempMap op)
+                                     , j Eq ~$$ l1
+                                     , jmp ~$$ l2
+                                     ]
