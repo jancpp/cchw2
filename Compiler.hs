@@ -69,10 +69,19 @@ getDefs (Gep def _ _ [_])         = [def]
 
 
 compileFunction :: Types -> (String, Function) -> X86.Prog
-compileFunction tys (n, fun) = []
+compileFunction tys (n, (args, retType, cfg@(first, rest))) = [(n, True, Text ([pushq ~%RBP
+                                                , movq ~%RSP ~%RBP
+                                                , subq ~$(8 * fromIntegral (length tempMap)) ~%RSP ] ++
+                                                map (\((t, n), reg) -> movq ~%reg ~~(fromJust (lookup n tempMap)) ) (zip args argRegs) ++
+                                                concatMap (\((t, n), i) -> [ movq ~#(8*i + 8, RBP) ~%RAX
+                                                                           , movq ~%RAX ~~(fromJust (lookup n tempMap))] ) (zip (drop 6 args) [1..]) ++
+                                                compileBlock tys tempMap first
+                                                ))] ++ map (\(n, b) -> (n, False, Text (compileBlock tys tempMap b))) rest
+            where tempMap = map (\(i, n) -> (n, IndBoth (-8*i) RBP)) (zip [1..] (temporaries cfg ++ map snd args))
+                  argRegs = [RDI, RSI, RDX, RCX, R08, R09]
 
 compileBlock :: Types -> TemporaryMap -> Block -> [X86.SourceInstr]
-compileBlock tys tmap (instr, term) = []
+compileBlock tys tmap (instr, term) = (concatMap (\n -> compileInstr tys tmap n) instr) ++ compileTerm tmap term
 
 compileOperand :: TemporaryMap -> LL.Operand -> X86.SourceOperand
 compileOperand tempMap (Const n) = Imm (Literal n)
@@ -81,18 +90,20 @@ compileOperand tempMap (Uid n) = fromJust (lookup n tempMap)
 
 
 compileInstr :: Types -> TemporaryMap -> LL.Instruction -> [X86.SourceInstr]
-compileInstr ts tempMap (Bin dst oprtr ty op1 op2) = [] -- %uid = binop t op, op -- case oprtr of
+compileInstr ts tempMap (Bin dst oprtr ty op1 op2) = [movq ~~(compileOperand tempMap op1) ~%RAX
+                                                    , oprtrMap ~~(compileOperand tempMap op2) ~%RAX
+                                                    , movq ~%RAX ~~(fromJust (lookup dst tempMap)) ]   -- %uid = binop t op, op -- case oprtr of
                 -- data Operator = Add | Sub | Mul | Shl | Lshr | Ashr | And | Or | Xor
-                -- where oprtrMap case oprtr of
-                --                 Add -> addq ~%R ~%R
-                --                 Sub -> subq ~%R ~%R
-                --                 Mul -> imulq ~%R ~%R
-                --                 Shl -> shrq ~%R ~%R
-                --                 Lshr -> shlq ~%R ~%R
-                --                 Ashr -> sarq ~%R ~%R
-                --                 And -> andq ~%R ~%R
-                --                 Or  -> orq ~%R ~%R
-                --                 Xor -> xorq ~%R ~%R
+                where oprtrMap = case oprtr of
+                                Add -> addq
+                                Sub -> subq 
+                                Mul -> imulq 
+                                Shl -> shrq 
+                                Lshr -> shlq 
+                                Ashr -> sarq 
+                                And -> andq 
+                                Or  -> orq 
+                                Xor -> xorq 
 compileInstr ts tempMap (Alloca al ty) = [ subq ~$(sizeOf ts ty) ~%RSP
                                          , movq ~%RSP ~~(fromJust (lookup al tempMap)) ]          -- %uid = alloca t
 compileInstr ts tempMap (Load id ty op ) =  [ movq ~~(compileOperand tempMap op) ~%RAX
@@ -107,7 +118,7 @@ compileInstr ts tempMap (Icmp id cc ty op1 op2) = [ movq ~~(compileOperand tempM
 compileInstr ts tempMap (Call id ret_ty name argOps) = regInstrs ++ stackIntrs ++ 
                                                        [ callq ~$$name, movq ~%RAX ~~(fromJust(lookup id tempMap))
                                                        , addq ~$(fromIntegral (length stackOps) * 8) ~%RSP]  -- %uid = call ret_ty name(t1 op1, t2 op2, ...)
-                    where argRegs = [RSI, RDI, RCX, RDX, R08, R09]
+                    where argRegs = [RDI, RSI, RDX, RCX, R08, R09]
                           regOps = take 6 argOps
                           stackOps = drop 6 argOps
                           regInstrs = map (\(reg, (t, op)) -> movq ~~(compileOperand tempMap op) ~%reg) (zip argRegs regOps)
